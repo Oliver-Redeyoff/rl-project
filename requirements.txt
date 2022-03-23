@@ -1,6 +1,3 @@
 tqdm
-gym
 gym[atari]
-gym[accept-rom-license]
 pygame
-ale-py
