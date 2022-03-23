@@ -1,3 +1,4 @@
 tqdm
-gym[atari]
+gym[atari,accept-rom-license]
 pygame
+autorom[accept-rom-license]
