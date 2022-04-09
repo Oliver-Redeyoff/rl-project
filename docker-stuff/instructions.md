@@ -1,5 +1,10 @@
 # Docker Stuff
 
+## Pre-reqs
+1. Clone the repo onto the cluster (or where you want to build it)
+    - May be easier to use `scp`
+2. Replace their Dockerfile with my one
+
 ## Dockerfile
 In this directory.
 Last line (starting with `CMD`) is the command that will be run
