@@ -24,4 +24,4 @@ RUN rm -rf __pycache__ && \
     python -m atari_py.import_roms roms
 
 
-CMD python -m baselines.run --alg=ppo2 --env=PongNoFrameskip-v4 --num_timesteps=2e7 --save_path=~/models/pong_20M_ppo2 --log_path=~/logs/Pong/
+CMD "/bin/bash"
