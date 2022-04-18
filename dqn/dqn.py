@@ -23,23 +23,18 @@ class Cnn(nn.Module):
 
         self.conv_net = nn.Sequential(
             nn.Conv2d(in_channels=3, out_channels=96, kernel_size=11, stride=4),  # (b x 96 x 55 x 55)
-            # nn.ReLU(),
             nn.LeakyReLU(),
             nn.LocalResponseNorm(size=5, alpha=0.0001, beta=0.75, k=2),  # section 3.3
             nn.MaxPool2d(kernel_size=3, stride=2),  # (b x 96 x 27 x 27)
             nn.Conv2d(96, 256, 5, padding=2),  # (b x 256 x 27 x 27)
-            # nn.ReLU(),
             nn.LeakyReLU(),
             nn.LocalResponseNorm(size=5, alpha=0.0001, beta=0.75, k=2),
             nn.MaxPool2d(kernel_size=3, stride=2),  # (b x 256 x 13 x 13)
             nn.Conv2d(256, 384, 3, padding=1),  # (b x 384 x 13 x 13)
-            # nn.ReLU(),
             nn.LeakyReLU(),
             nn.Conv2d(384, 384, 3, padding=1),  # (b x 384 x 13 x 13)
-            # nn.ReLU(),
             nn.LeakyReLU(),
             nn.Conv2d(384, 256, 3, padding=1),  # (b x 256 x 13 x 13)
-            # nn.ReLU(),
             nn.LeakyReLU(),
             nn.MaxPool2d(kernel_size=3, stride=2),  # (b x 256 x 6 x 6)
         )
@@ -47,25 +42,12 @@ class Cnn(nn.Module):
         self.classifier = nn.Sequential(
             nn.Dropout(p=0.5, inplace=True),
             nn.Linear(in_features=(256 * 5 * 3), out_features=4096),
-            # nn.ReLU(),
             nn.LeakyReLU(),
             nn.Dropout(p=0.5, inplace=True),
             nn.Linear(in_features=4096, out_features=4096),
-            # nn.ReLU(),
             nn.LeakyReLU(),
             nn.Linear(in_features=4096, out_features=classes_count),
         )
-
-        # self.init_bias()
-
-    def init_bias(self):
-        for layer in self.conv_net:
-            if isinstance(layer, nn.Conv2d):
-                nn.init.normal_(layer.weight, mean=0, std=0.01)
-                nn.init.constant_(layer.bias, 0)
-        nn.init.constant_(self.conv_net[4].bias, 1)
-        nn.init.constant_(self.conv_net[10].bias, 1)
-        nn.init.constant_(self.conv_net[12].bias, 1)
 
     def forward(self, x):
         x = self.conv_net(x)
@@ -118,7 +100,6 @@ class DQNAgent:
     def get_action(self, state):
         state = autograd.Variable(torch.from_numpy(state).float().unsqueeze(0))
         qvals = self.net(state)
-        print(qvals.tolist()[0])
         if (random.random() < self.epsilon):
             action = np.argmax(qvals.detach().numpy())
             print("Choosed best action {}".format(action))
@@ -146,7 +127,6 @@ class DQNAgent:
         return loss
 
     def train(self, batch_size):
-
         if (len(self.replay_buffer.buffer) >= batch_size):
             batch = self.replay_buffer.sample(batch_size)
             loss = self.compute_loss(batch)
