@@ -1,0 +1,6 @@
+tqdm
+gym[atari,accept-rom-license]
+pygame
+autorom[accept-rom-license]
+ale-py
+torch
