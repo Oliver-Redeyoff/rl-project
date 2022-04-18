@@ -4,3 +4,4 @@ pygame
 autorom[accept-rom-license]
 ale-py
 torch
+torchvision
