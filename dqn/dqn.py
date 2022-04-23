@@ -11,6 +11,7 @@ import torch.autograd as autograd
 import torch.optim as optim
 from torchvision.transforms import functional
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Cnn(nn.Module):
 
@@ -18,36 +19,25 @@ class Cnn(nn.Module):
         super().__init__()
 
         self.conv_net = nn.Sequential(
-            nn.Conv2d(in_channels=4, out_channels=96, kernel_size=11, stride=4),  # (b x 96 x 55 x 55)
-            nn.LeakyReLU(),
-            nn.LocalResponseNorm(size=5, alpha=0.0001, beta=0.75, k=2),  # section 3.3
-            nn.MaxPool2d(kernel_size=3, stride=2),  # (b x 96 x 27 x 27)
-            nn.Conv2d(96, 256, 5, padding=2),  # (b x 256 x 27 x 27)
-            nn.LeakyReLU(),
-            nn.LocalResponseNorm(size=5, alpha=0.0001, beta=0.75, k=2),
-            nn.MaxPool2d(kernel_size=3, stride=2),  # (b x 256 x 13 x 13)
-            nn.Conv2d(256, 384, 3, padding=1),  # (b x 384 x 13 x 13)
-            nn.LeakyReLU(),
-            nn.Conv2d(384, 384, 3, padding=1),  # (b x 384 x 13 x 13)
-            nn.LeakyReLU(),
-            nn.Conv2d(384, 256, 3, padding=1),  # (b x 256 x 13 x 13)
-            nn.LeakyReLU(),
-            nn.MaxPool2d(kernel_size=3, stride=2),  # (b x 256 x 6 x 6)
+            nn.Conv2d(in_channels=4, out_channels=4, kernel_size=4, stride=2),
+            nn.MaxPool2d(kernel_size=2, stride=2)
         )
 
         self.classifier = nn.Sequential(
-            nn.Dropout(p=0.5, inplace=True),
-            nn.Linear(in_features=(512), out_features=4096),
-            nn.LeakyReLU(),
-            nn.Dropout(p=0.5, inplace=True),
+            nn.Dropout(p=0.5),
+            nn.Linear(in_features=2160, out_features=4096),
+            nn.ReLU(),
+            nn.Dropout(p=0.5),
             nn.Linear(in_features=4096, out_features=4096),
-            nn.LeakyReLU(),
-            nn.Linear(in_features=4096, out_features=classes_count),
+            nn.ReLU(),
+            nn.Linear(in_features=4096, out_features=4096),
+            nn.ReLU(),
+            nn.Linear(in_features=4096, out_features=classes_count)
         )
 
     def forward(self, x):
         x = self.conv_net(x)
-        x = x.view(-1, 512)  # reduce the dimensions for linear layer input
+        x = x.view(-1, 2160)  # reduce the dimensions for linear layer input
         return self.classifier(x)
 
 class ReplayBuffer:
@@ -70,9 +60,9 @@ class DQNAgent:
 
     def __init__(self, actions):
         self.classes = actions
-        self.net = Cnn(len(actions))
+        self.net = Cnn(len(actions)).to(DEVICE)
         self.optimizer = optim.Adam(params=self.net.parameters(), lr=0.0001)
-        self.replay_buffer = ReplayBuffer(1000)
+        self.replay_buffer = ReplayBuffer(10000)
         self.gamma = 0.9
         self.epsilon = 0.5
         self.MSE_loss = nn.MSELoss()
@@ -91,21 +81,30 @@ class DQNAgent:
         state, action, reward, next_state, done = experience
         state = torch.Tensor(state)
         next_state = torch.Tensor(next_state)
+        reward = torch.Tensor([reward])
 
-        curr_Q = self.net(state)
-        next_Q = self.net(next_state)
-        max_next_Q = torch.max(next_Q, 1)[0]
-        expected_Q = reward + self.gamma * max_next_Q
+        expected_result = self.net(state)
+        q_value = expected_result[0][action]
 
-        loss = self.MSE_loss(curr_Q, expected_Q.detach())
+        if done:
+            y_j = reward
+        
+        else:
+            result = self.net(next_state)
+            max_next_reward = torch.max(result.sum(dim=0))
+
+            y_j = reward + self.gamma * max_next_reward
+
+        loss = self.MSE_loss(q_value, y_j)
         return loss
 
     def train(self, batch_size):
         if (len(self.replay_buffer.buffer) >= batch_size):
             batch = self.replay_buffer.sample(batch_size)
             for experience in batch:
-                loss = self.compute_loss(experience)
                 self.optimizer.zero_grad()
+                loss = self.compute_loss(experience)
+                print("Loss: {}".format(loss))
                 loss.backward()
                 self.optimizer.step()
 
@@ -131,7 +130,9 @@ class Environment:
         as_tensor = torch.Tensor(transposed)
         grey = functional.rgb_to_grayscale(as_tensor)
         downsampled = functional.resize(grey, [110, 84])
-        self.state.append(downsampled)
+        thresh = nn.Threshold(87.3, 0)
+        background_removed = thresh(downsampled)
+        self.state.append(background_removed)
         if (len(self.state) > 4):
             self.state.pop(0)
 
@@ -147,8 +148,8 @@ def main():
     env = Environment()
     agent = DQNAgent(env.actions)
 
-    episode_count = 100
-    for _ in range(episode_count):
+    episode_count = 100000
+    for episode_num in range(episode_count):
         episode_reward = 0
         env.reset()
 
@@ -163,6 +164,8 @@ def main():
                 agent.train(1)
 
             if done:
+                print("Finished episode {} with reward: {}".format(episode_num, episode_reward))
+
                 with open('rewards.txt', 'a') as f:
                     f.write(str(episode_reward))
                     f.write('\n')
