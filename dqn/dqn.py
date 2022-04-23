@@ -104,7 +104,6 @@ class DQNAgent:
             for experience in batch:
                 self.optimizer.zero_grad()
                 loss = self.compute_loss(experience)
-                print("Loss: {}".format(loss))
                 loss.backward()
                 self.optimizer.step()
 
