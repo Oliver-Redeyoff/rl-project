@@ -8,6 +8,7 @@ import random
 import numpy as np
 import torch
 from torch import nn
+import torch.nn.functional as F
 import torch.autograd as autograd
 import torch.optim as optim
 from torchvision.transforms import functional
@@ -15,46 +16,59 @@ from torchvision.transforms import functional
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class ImageNetwork(nn.Module):
-    def __init__(self, classes_count) -> None:
+    def __init__(self, classes_count, in_channels) -> None:
         super().__init__()
 
-        self._cnn = nn.Sequential(
-            nn.Conv2d(in_channels=4, out_channels=4, kernel_size=4, stride=2),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-           # nn.Conv2d(in_channels=4, out_channels = 8, kernel_size=5, stride=2)
-        )
-
-        self._action_network = nn.Sequential(
-            nn.Dropout(p=0.5),
-            nn.Linear(in_features=512, out_features=4096),
-            nn.ReLU(),
-            nn.Dropout(p=0.5),
-            nn.Linear(in_features=4096, out_features=4096),
-            nn.ReLU(),
-            nn.Linear(in_features=4096, out_features=4096),
-            nn.ReLU(),
-            nn.Linear(in_features=4096, out_features=classes_count),
-        )
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
+        # self.bn1 = nn.BatchNorm2d(32)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
+        # self.bn2 = nn.BatchNorm2d(64)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        # self.bn3 = nn.BatchNorm2d(64)
+        self.fc4 = nn.Linear(7 * 7 * 64, 512)
+        self.head = nn.Linear(512, classes_count)
 
     @classmethod
     def preprocess_image(cls, image):
         """Prepare an image for input to the network"""
-        # print(type(image))
-        transposed = image.transpose(1, 3)
+        image = torch.Tensor(image).to(DEVICE)
+        transposed = image.transpose(2, 0)
         # print(transposed.shape)
-        grey = functional.rgb_to_grayscale(transposed)
-        thresh = torch.threshold(grey, 83, 0)
+        # grey = functional.rgb_to_grayscale(transposed)
+        # thresh = torch.threshold(grey, 83, 0)
         # downsampled = functional.resize(grey, [110, 84])
 
-        return thresh
+        return transposed.unsqueeze(0)
 
     def forward(self, input_image):
-        convoluted_image = self._cnn(input_image)
+        # input_image = input_image.squeeze(1)
+        print(input_image.shape)
+        x = input_image.float() / 255
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        print(x.shape)
+        x_view = x.view(x.size(0), -1)
+        print(x_view.shape)
+        x = F.relu(self.fc4(x.view(x.size(0), -1)))
+        return self.head(x)
 
-        # print("Convoluted: ", convoluted_image.shape)
+class Batch:
+    def __init__(self, batch_size) -> None:
+        self._batch = []
+        self._batch_size = batch_size
 
-        new_view = convoluted_image.view(-1, 512)  # reduce the dimensions for linear layer input
-        return self._action_network(new_view)
+    def is_complete(self):
+        return len(self._batch) == self._batch_size
+    
+    def add_element(self, element):
+        if self.is_complete():
+            self._batch.pop(0)
+
+        self._batch.append(element)
+
+    def get_batch(self):
+        return torch.stack(self._batch)
 
 class ReplayBuffer:
 
@@ -74,13 +88,15 @@ class ReplayBuffer:
 
 class DQNAgent:
 
-    def __init__(self, actions, epsilon=0.5, gamma=0.9):
+    def __init__(self, actions, batch_size, in_channels, epsilon=0.5, gamma=0.9, buffer_size=10000):
         self.classes = actions
-        self.net = ImageNetwork(len(actions))
-        self.optimizer = optim.Adam(params=self.net.parameters(), lr=0.0001)
-        self.replay_buffer = ReplayBuffer(10000)
         self.gamma = gamma
         self.epsilon = epsilon
+        self.batch_size = batch_size
+
+        self.net = ImageNetwork(len(actions), in_channels).to(DEVICE)
+        self.optimizer = optim.Adam(params=self.net.parameters(), lr=0.0001)
+        self.replay_buffer = ReplayBuffer(buffer_size)
         self.MSE_loss = nn.MSELoss()
         self.huber_loss = nn.HuberLoss()
 
@@ -90,14 +106,17 @@ class DQNAgent:
         if should_explore:
             return random.choice(actions)
 
+        # print("state shape: ", state.shape)
         result = self.net(state)
-        print(result)
+        # print("result: ", result)
         reduced = result.sum(dim=0)
         selected_action = torch.argmax(reduced)
 
         return selected_action
 
     def compute_loss(self, experience):
+        print("===")
+
         state, action, reward, next_state, done = experience
         state = torch.Tensor(state)
         next_state = torch.Tensor(next_state)
@@ -106,23 +125,30 @@ class DQNAgent:
         expected_result = self.net(state)
         q_value = expected_result[action]
 
+        print(q_value)
         if done:
             y_j = reward
         
         else:
             result = self.net(next_state)
+            print(state.shape)
+            print(next_state.shape)
+            print(result.shape)
             max_next_reward = torch.max(result.sum(dim=0))
-
+            print(max_next_reward)
             y_j = reward + self.gamma * max_next_reward
 
+        print(q_value)
+        print(y_j)
         loss = self.huber_loss(q_value, y_j)
+        print("===")
         return loss
 
-    def train(self, batch_size):
-        if len(self.replay_buffer) < batch_size:
+    def train(self):
+        if len(self.replay_buffer) < self.batch_size:
             return
 
-        batch = self.replay_buffer.sample(batch_size)
+        batch = self.replay_buffer.sample(self.batch_size)
         self.optimizer.zero_grad()
         for experience in batch:
             loss = self.compute_loss(experience)
@@ -135,26 +161,25 @@ class Environment:
 
     def __init__(self, frame_skip, environment_name='ALE/Pong-v5'):
         self.frame_skip = frame_skip
-        self.gym_env = gym.make(environment_name) #, render_mode="human"
+        self.gym_env = gym.make(environment_name, frameskip=frame_skip, full_action_space=False) #, render_mode="human"
         self.gym_env.seed(0)
         self.actions = [i for i in range(self.gym_env.action_space.n)]
         self.state = []
 
     def reset(self):
         """Reset for new episode"""
-        self.state = []
 
         frame = self.gym_env.reset()
         frame = ImageNetwork.preprocess_image(frame)
-        self.add_frame_to_state(frame)
+        return frame
 
     def take_action(self, action):
         frame, reward, done, _ = self.gym_env.step(action)
         frame = ImageNetwork.preprocess_image(frame)
-        self.add_frame_to_state(frame)
-        return (reward, done)
+        return (frame, reward, done)
 
     def add_frame_to_state(self, frame):
+        raise NotImplementedError
         frame = torch.Tensor(frame)
         self.state.append(frame)
 
@@ -163,49 +188,50 @@ class Environment:
             self.state.pop(0)
 
     def get_state(self):
-        return torch.stack(self.state).squeeze(1)
+        raise NotImplementedError
+        return torch.stack(self.state)
 
 def main(frame_skip=4, batch_size=4, num_episodes=1000):
     if os.path.exists("rewards_image.txt"):
         os.remove("rewards_image.txt")
 
     env = Environment(frame_skip, environment_name='ALE/Pong-v5')
-    agent = DQNAgent(env.actions)
+    agent = DQNAgent(env.actions, batch_size, env.gym_env.observation_space.shape[2], epsilon=1, gamma=0.99)
 
     for episode_num in range(int(num_episodes)):
         episode_reward = 0
         start_time = time.perf_counter()
-        env.reset()
+        current_state = env.reset()
+
+        batch = Batch(batch_size)
 
         done = False
         while not done:
-            current_state = env.get_state()
-            # print(current_state.shape)
-            current_state = ImageNetwork.preprocess_image(current_state)
+
+            # print("current state: ", current_state.shape)
             action = agent.get_action(current_state, env.actions)
-            reward, done = env.take_action(action)
+            next_state, reward, done = env.take_action(action)
             
             episode_reward += reward
 
-            if (len(current_state) == frame_skip):
-                next_state = env.get_state()
-                next_state = ImageNetwork.preprocess_image(next_state)
-                agent.replay_buffer.add_replay(current_state, action, reward, next_state, done)
-                agent.train(batch_size)
+            if batch.is_complete():
+                agent.replay_buffer.add_replay(batch.get_batch(), action, reward, next_state, done)
 
-            if done:
-                end_time = time.perf_counter()
-                print(f"episode: {episode_num+1} reward: {episode_reward} time taken: {end_time-start_time} epsilon: {agent.epsilon}")
-                with open('rewards.txt', 'a') as f:
-                    f.write(str(episode_reward))
-                    f.write('\n')
+            agent.train()
+
+            current_state = next_state
+
+        print(f"episode: {episode_num+1} reward: {episode_reward} time taken: {time.perf_counter()-start_time} epsilon: {agent.epsilon}")
+        
+        with open('rewards.txt', 'a') as f:
+            f.write(str(episode_reward))
+            f.write('\n')
 
         if episode_num % 50 == 0:
             with open('agent.pkl', 'wb') as outp:
                 pickle.dump(agent, outp, pickle.HIGHEST_PROTOCOL)
 
-        if episode_num % 10 == 10:
-            agent.epsilon *= 0.9
+        agent.epsilon = max(0.05, agent.epsilon * 0.99)
 
 
 if __name__ == '__main__':
