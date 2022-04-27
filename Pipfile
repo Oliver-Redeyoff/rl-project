@@ -1,0 +1,20 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+tqdm = "*"
+gym = {extras = ["accept-rom-license"], version = "*"}
+pygame = "*"
+ale-py = "*"
+torch = "*"
+torchvision = "*"
+matplotlib = "*"
+tk = "*"
+
+[dev-packages]
+ipykernel = "*"
+
+[requires]
+python_version = "3.10"
