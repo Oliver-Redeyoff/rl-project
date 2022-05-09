@@ -12,71 +12,83 @@ import torch.nn.functional as F
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# Convolutional neural network our RL agent will use
+# Dueling convolutional neural network our RL agent will use
 class Cnn(nn.Module):
     def __init__(self, h, w, output_size):
         super(Cnn, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=4,  out_channels=32, kernel_size=8, stride=4)
-        self.bn1 = nn.BatchNorm2d(32)
-        convw, convh = self.conv2d_size_calc(w, h, kernel_size=8, stride=4)
-        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2)
-        self.bn2 = nn.BatchNorm2d(64)
-        convw, convh = self.conv2d_size_calc(convw, convh, kernel_size=4, stride=2)
-        self.conv3 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1)
-        self.bn3 = nn.BatchNorm2d(64)
-        convw, convh = self.conv2d_size_calc(convw, convh, kernel_size=3, stride=1)
+        conv1w, conv1h = self.conv_out(w, h, kernel_size=8, stride=4)
+        conv2w, conv2h = self.conv_out(conv1w, conv1h, kernel_size=4, stride=2)
+        conv3w, conv3h = self.conv_out(conv2w, conv2h, kernel_size=3, stride=1)
 
-        linear_input_size = convw * convh * 64  # Last conv layer's out sizes
+        self.conv_net = nn.Sequential(
+            nn.Conv2d(in_channels=4,  out_channels=32, kernel_size=8, stride=4),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU()
+        )
+
+        # last convolution layer's flattened output size
+        linear_input_size = conv3w * conv3h * 64
 
         # action layer
-        self.Alinear1 = nn.Linear(in_features=linear_input_size, out_features=128)
-        self.Alrelu = nn.LeakyReLU()  # Linear 1 activation funct
-        self.Alinear2 = nn.Linear(in_features=128, out_features=output_size)
+        self.action_value_net = nn.Sequential(
+            nn.Linear(in_features=linear_input_size, out_features=128),
+            nn.LeakyReLU(),
+            nn.Linear(in_features=128, out_features=output_size)
+        )
 
-        # state Value layer
-        self.Vlinear1 = nn.Linear(in_features=linear_input_size, out_features=128)
-        self.Vlrelu = nn.LeakyReLU()  # Linear 1 activation funct
-        self.Vlinear2 = nn.Linear(in_features=128, out_features=1)  # Only 1 node
+        # state value layer
+        self.state_value_net = nn.Sequential(
+            nn.Linear(in_features=linear_input_size, out_features=128),
+            nn.LeakyReLU(),
+            nn.Linear(in_features=128, out_features=1)
+        )
 
-    def conv2d_size_calc(self, w, h, kernel_size=5, stride=2):
-        # calcs conv layers output image sizes
+    def conv_out(self, w, h, kernel_size=5, stride=2):
+        # calculates convolution layer's output image size
         next_w = (w - (kernel_size - 1) - 1) // stride + 1
         next_h = (h - (kernel_size - 1) - 1) // stride + 1
         return next_w, next_h
 
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
+        # convolute state
+        x = self.conv_net(x)
 
-        x = x.view(x.size(0), -1)  # flatten every batch
+        # flatten
+        x = x.view(x.size(0), -1)
 
-        Ax = self.Alrelu(self.Alinear1(x))
-        Ax = self.Alinear2(Ax)  # no activation on last layer
+        # get state-action values
+        Ax = self.action_value_net(x)
 
-        Vx = self.Vlrelu(self.Vlinear1(x))
-        Vx = self.Vlinear2(Vx)  # no activation on last layer
+        # get state value
+        Vx = self.state_value_net(x)
 
+        # combine values
         q = Vx + (Ax - Ax.mean())
-
         return q
 
-# Deep reinforcement learning agent
-class DQNAgent:
+# Double deep reinforcement learning agent
+class DDQNAgent:
     def __init__(self, environment):
         # state size for breakout env. SS images (210, 160, 3). Used as input size in network
         self.state_size_h = environment.observation_space.shape[0]
         self.state_size_w = environment.observation_space.shape[1]
         self.state_size_c = environment.observation_space.shape[2]
 
-        # activation size for breakout env. Used as output size in network
+        # number of actions, used as output size in neural network
         self.action_size = environment.action_space.n
 
+        # initialise hyper-parameters
         self.gamma = 0.9
         self.alpha = 0.0001
         self.epsilon = 1
 
-        # deque holds replay mem.
+        # replay memory
         self.memory = deque(maxlen=50000)
 
         # create two model for DDQN algorithm
@@ -87,10 +99,14 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.online_model.parameters(), lr=self.alpha)
 
     def preProcess(self, image):
-        frame = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)  # grayscale image
-        frame = frame[20:self.state_size_h, 0:self.state_size_w]  # crop 20px from top of image
-        frame = cv2.resize(frame, (64, 80))  # resize image
-        frame = frame.reshape(64, 80) / 255  # normalize image
+        # grayscale image
+        frame = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # crop 20px from top of image
+        frame = frame[20:self.state_size_h, 0:self.state_size_w]
+        # resize image
+        frame = cv2.resize(frame, (64, 80))
+        # normalize image
+        frame = frame.reshape(64, 80) / 255
 
         return frame
 
@@ -103,8 +119,9 @@ class DQNAgent:
         else:
             with torch.no_grad():
                 state = torch.tensor(state, dtype=torch.float, device=DEVICE).unsqueeze(0)
-                q_values = self.online_model.forward(state)  # (1, action_size)
-                action = torch.argmax(q_values).item()  # Returns the indices of the maximum value of all elements
+                q_values = self.online_model.forward(state)
+                # get the best action
+                action = torch.argmax(q_values).item()
 
         return action
 
@@ -162,7 +179,7 @@ class DQNAgent:
 # Main method
 def main():
     environment = gym.make("Pong-v4")
-    agent = DQNAgent(environment)
+    agent = DDQNAgent(environment)
 
     last_100_ep_reward = deque(maxlen=100)
     total_steps = 0
@@ -178,7 +195,7 @@ def main():
             action = agent.chooseAction(state)
             raw_frame, reward, done, _ = environment.step(action)
 
-            # stack state . Every state contains 4 time contionusly frames
+            # stack state, every state contains 4 continuous frames
             # we stack frames like 4 channel image
             frame = agent.preProcess(raw_frame)
             next_state = np.stack((frame, state[0], state[1], state[2]))
