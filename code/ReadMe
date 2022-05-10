@@ -1,16 +1,21 @@
 HOW TO RUN:
 
-
--- DDDQN --
-Requires the following python packages: gym, cv2, numpy, torch
+Requires python3.6 or higher.
+Requires jupyter notebooks to be installed.
+Requires the following python packages: gym, cv2, numpy, torch.
 In order to install these packages run:
     pip3 install gym, cv2, numpy, torch
-    
-Run using the command: 
+
+-- DDDQN --
+Run using command: 
     python3 dddqn.py
 
 
 -- PPO --
+Run using command: 
+    python3 ppo.py
 
 
 -- Reinforce --
+Run notebook using command:
+    jupyter notebook reinforce.ipynb
